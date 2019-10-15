@@ -18,12 +18,15 @@ from pyparsing import (
     OneOrMore,
     ZeroOrMore,
     pythonStyleComment,
-    Dict,
     lineEnd,
     Suppress,
     indentedBlock,
     ParseException,
 )
+
+from pyparsing import Dict as pyparsing_Dict
+
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +42,9 @@ class WrongSSHConfig(Exception):
 
 
 class Host(object):
-    attrs = [
+    """
+    """
+    keywords = [
         ("AddressFamily", str), # any, inet, inet6
         ("BatchMode", str),
         ("BindAddress", str),
@@ -83,54 +88,58 @@ class Host(object):
         ("UsePrivilegedPort", str), # yes, no
     ]
 
-    def __init__(self, name, attrs):
-        if isinstance(name, list):
-            self.__name = name
-        elif isinstance(name, str):
-            self.__name = name.split() 
-        else:
-            raise TypeError
-        self.__attrs = dict()
+    def __init__(self, host: List, attrs: Dict) -> None:
+        if not isinstance(host, List):
+            raise TypeError(f"host must be a List, but given {type(host)}")
+        
+        if not isinstance(attrs, Dict):
+            raise TypeError(f"host must be a Dict, but given {type(host)}")
+        self._host = host
+        self._attrs = dict()
         attrs = {key.upper(): value for key, value in attrs.items()}
-        for attr, attr_type in self.attrs:
+        for attr, attr_type in Host.keywords:
             if attrs.get(attr.upper()):
-                self.__attrs[attr] = attr_type(attrs.get(attr.upper()))
+                try:
+                    self._attrs[attr] = attr_type(attrs.get(attr.upper()))
+                except TypeError:
+                    raise TypeError(f"{attr} value is not expected type, {attr_type}, {type(attrs.get('attr.uppe()'))}")
 
     def attributes(self, exclude=[], include=[]):
         if exclude and include:
             raise Exception("exclude and include cannot be together")
         if exclude:
             return {
-                key: self.__attrs[key] for key in self.__attrs if key not in exclude
+                key: self._attrs[key] for key in self._attrs if key not in exclude
             }
         elif include:
-            return {key: self.__attrs[key] for key in self.__attrs if key in include}
-        return self.__attrs
+            return {key: self._attrs[key] for key in self._attrs if key in include}
+        return self._attrs
 
     def __str__(self):
-        data = "Host %s\n" % self.name
-        for key, value in self.__attrs.items():
-            data += "    %s %s\n" % (key, value)
-        return data
+        return self.as_string()
 
     def __getattr__(self, key):
-        return self.__attrs.get(key)
+        return self._attrs.get(key)
 
     @property
-    def name(self):
-        return " ".join(self.__name)
+    def host(self) -> List:
+        return self._host
+    
+    @property
+    def rawhost(self) -> str:
+        return ' '.join(self._host)
 
-    def update(self, attrs):
+    def update(self, attrs: Dict):
         if isinstance(attrs, dict):
-            self.__attrs.update(attrs)
+            self._attrs.update(attrs)
             return self
         raise AttributeError
 
-    def get(self, key, default=None):
-        return self.__attrs.get(key, default)
+    def get(self, key: str, default=None):
+        return self._attrs.get(key, default)
 
-    def set(self, key, value):
-        self.__attrs[key] = value
+    def set(self, key: str, value: Any):
+        self._attrs[key] = value
 
     def command(self, cmd="ssh"):
         if self.Port and self.Port != 22:
@@ -147,6 +156,15 @@ class Host(object):
             cmd=cmd, port=port, username=user, host=self.HostName
         )
     
+    def as_dict(self) -> Dict:
+        d = {'host': self.host}
+        d.update(self._attrs)
+        return d
+    
+    def as_string(self) -> str:
+        s = (f"Host {self.rawhost}\n")
+        for attr in self.attributes():
+            s += ("    %s %s\n" % (attr, self.get(attr)))
     def ansible(self):
         pass
 
@@ -174,7 +192,9 @@ class SSHConfig(object):
             attrs = dict()
             for attr in config:
                 attrs.update(attr)
-            ssh_config.append(Host(name, attrs))
+            ssh_config.append(
+                Host(name.split(), attrs)
+            )
         return ssh_config
 
     def parse(self, data=""):
@@ -183,16 +203,16 @@ class SSHConfig(object):
 
         SPACE = White().suppress()
         SEP = Suppress(SPACE) | Suppress("=")
-        HOST = CaselessLiteral("Host").suppress()
+        HOST_KEY = CaselessLiteral("Host").suppress()
         KEY = Word(alphanums)
-        VALUE = Word(alphanums + ' ~%*?!._-+/,"')
+        HOST = Word(alphanums + '~%*?!._-+/,"')
         paramValueDef = SkipTo("#" | lineEnd)
         indentStack = [1]
 
-        HostDecl = HOST + SEP + VALUE
-        paramDef = Dict(Group(KEY + SEP + paramValueDef))
+        HostDecl = HOST_KEY + SEP + HOST
+        paramDef = pyparsing_Dict(Group(KEY + SEP + paramValueDef))
         block = indentedBlock(paramDef, indentStack)
-        HostBlock = Dict(Group(HostDecl + block))
+        HostBlock = pyparsing_Dict(Group(HostDecl + block))
         try:
             return OneOrMore(HostBlock).ignore(pythonStyleComment).parseString(self.raw)
         except ParseException as e:
@@ -211,21 +231,21 @@ class SSHConfig(object):
     def hosts(self):
         return self.__hosts
 
-    def update(self, name, attrs):
+    def update(self, name, attrs:dict):
         for idx, host in enumerate(self.__hosts):
-            if name == host.name:
+            if name == host.rawhost:
                 host.update(attrs)
                 self.__hosts[idx] = host
 
     def get(self, name, raise_exception=True):
         for host in self.__hosts:
-            if host.name == name:
+            if host.host == name:
                 return host
         if raise_exception:
             raise KeyError
         return None
 
-    def append(self, host):
+    def append(self, host: Host) -> None:
         if not isinstance(host, Host):
             raise TypeError
         self.__hosts.append(host)
@@ -237,15 +257,13 @@ class SSHConfig(object):
             return True
         return False
 
-    def write(self, filename=""):
+    def write(self, filename: str="") -> str:
         if filename:
             self.__path = filename
         with open(self.__path, "w") as f:
             for host in self.__hosts:
-                f.write("Host %s\n" % host.name)
-                for attr in host.attributes():
-                    f.write("    %s %s\n" % (attr, host.get(attr)))
+                f.write(host.as_string())
         return self.__path
 
-    def asdict(self):
-        return {host.name: host.attributes() for host in self.__hosts}
+    def as_dict(self):
+        return [host.as_dict() for host in self.__hosts]

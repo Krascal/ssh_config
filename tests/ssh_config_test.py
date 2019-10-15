@@ -10,7 +10,7 @@ else:
     from io import StringIO
 
 import docopt
-from contextlib2 import redirect_stdout
+from contextlib import redirect_stdout
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from ssh_config import SSHConfig, Host
@@ -20,7 +20,7 @@ from ssh_config import cli
 logging.basicConfig(level=logging.INFO)
 sample = os.path.join(os.path.dirname(__file__), "sample")
 
-new_host = Host("server2", {"ServerAliveInterval": 200, "HostName": "203.0.113.77"})
+new_host = Host(["server2"], {"ServerAliveInterval": 200, "HostName": "203.0.113.77"})
 
 new_data = """Host server2
     HostName 203.0.113.77
@@ -32,16 +32,16 @@ class TestSSHConfig(unittest.TestCase):
     def test_load(self):
         configs = SSHConfig.load(sample)
         for config in configs:
-            self.assertIn(config.name, ["server1", "*"])
+            self.assertIn(config.rawhost, ["server1", "*"])
             break
 
     def test_other(self):
         configs = SSHConfig.load(sample)
         for host in configs:
-            if host.name == "server1":
+            if host.rawhost == "server1":
                 self.assertEqual(host.HostName, "203.0.113.76")
 
-            if host.name == "*":
+            if host.rawhost == "*":
                 self.assertEqual(host.ServerAliveInterval, 40)
 
     def test_set(self):
@@ -129,28 +129,40 @@ class TestSSHConfig(unittest.TestCase):
 
     def test_asdict(self):
         configs = SSHConfig.load(sample)
-        self.assertEqual(
-            {
-                "*": {"ServerAliveInterval": 40},
-                "server1": {"HostName": "203.0.113.76", "ServerAliveInterval": 200},
-                "server_cmd_1": {"HostName": "203.0.113.76", "Port": 2202},
-                "server_cmd_2": {
+        self.assertListEqual(
+            [
+                {
+                    "host": ["*"],
+                    "ServerAliveInterval": 40
+                },
+                {
+                    "host": ["server1"],
+                    "HostName": "203.0.113.76", "ServerAliveInterval": 200
+                },
+                {
+                    "host": ["server_cmd_1"],
+                    "HostName": "203.0.113.76", "Port": 2202
+                },
+                {
+                    "host": ["server_cmd_2"],
                     "HostName": "203.0.113.76",
                     "Port": 22,
                     "User": "user",
                 },
-                "server_cmd_3": {
+                {
+                    "host": ["server_cmd_3"],
                     "HostName": "203.0.113.76",
                     "Port": 2202,
                     "User": "user",
                 },
-                "host_1 host_2": {
+                {
+                    "host": ["host_1", "host_2"],
                     "HostName": "%h.test.com",
                     "Port": 2202,
                     "User": "user",
                 },
-            },
-            configs.asdict(),
+            ],
+            configs.as_dict(),
         )
 
 
